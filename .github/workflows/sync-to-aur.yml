@@ -16,13 +16,13 @@ jobs:
       uses: actions/checkout@v4
       
     - name: Setup SSH for AUR
-      if: secrets.AUR_SSH_PRIVATE_KEY != null
+      if: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}
       uses: webfactory/ssh-agent@v0.8.0
       with:
         ssh-private-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-        
+
     - name: Sync to AUR
-      if: secrets.AUR_SSH_PRIVATE_KEY != null
+      if: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}
       run: |
         # 克隆 AUR 仓库
         git clone ssh://aur@aur.archlinux.org/fnpack-bin.git aur-repo
@@ -43,9 +43,9 @@ jobs:
         else
           echo "No changes to sync to AUR"
         fi
-        
+
     - name: Skip AUR sync (no SSH key)
-      if: secrets.AUR_SSH_PRIVATE_KEY == null
+      if: ${{ secrets.AUR_SSH_PRIVATE_KEY == '' }}
       run: |
         echo "AUR_SSH_PRIVATE_KEY not provided, skipping AUR sync"
         echo "To enable AUR sync, add your SSH private key as a secret named AUR_SSH_PRIVATE_KEY"

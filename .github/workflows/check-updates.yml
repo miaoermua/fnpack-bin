@@ -1,0 +1,108 @@
+name: Check for Updates
+
+on:
+  schedule:
+    # 每天 UTC 时间中午 12 点运行 (北京时间晚上 8 点)
+    - cron: '0 12 * * *'
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  check-for-updates:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y curl jq git
+        
+    - name: Check for new version
+      id: check_version
+      run: |
+        # 获取当前版本
+        CURRENT_VERSION=$(grep "^pkgver=" PKGBUILD | cut -d'=' -f2)
+        echo "Current version: $CURRENT_VERSION"
+
+        # 从开发者网站页面获取最新版本号
+        # 查找页面中类似 fnpack-X.X.X- 的模式
+        LATEST_VERSION=$(curl -s https://developer.fnnas.com/docs/cli/fnpack/ | strings | grep -oE 'fnpack-[0-9]+\.[0-9]+\.[0-9]+-' | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+
+        echo "Latest version from website: $LATEST_VERSION"
+
+        # 比较版本
+        if [ -n "$LATEST_VERSION" ] && [ "$LATEST_VERSION" != "$CURRENT_VERSION" ]; then
+          echo "New version available: $LATEST_VERSION"
+          echo "new_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          echo "version_changed=true" >> $GITHUB_OUTPUT
+        else
+          echo "No new version available"
+          echo "version_changed=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Update package if new version available
+      if: steps.check_version.outputs.version_changed == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        NEW_VERSION=${{ steps.check_version.outputs.new_version }}
+        echo "Updating to version: $NEW_VERSION"
+
+        # 设置 git 用户信息
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+        # 更新 PKGBUILD
+        sed -i "s/^pkgver=.*/pkgver=$NEW_VERSION/" PKGBUILD
+
+        # 获取新版本的下载链接和校验和
+        X86_64_URL="https://static2.fnnas.com/fnpack/fnpack-${NEW_VERSION}-linux-amd64"
+        AARCH64_URL="https://static2.fnnas.com/fnpack/fnpack-${NEW_VERSION}-linux-arm64"
+
+        # 下载文件并计算校验和
+        X86_64_CHECKSUM=$(curl -s -L "$X86_64_URL" | sha256sum | cut -d' ' -f1)
+        AARCH64_CHECKSUM=$(curl -s -L "$AARCH64_URL" | sha256sum | cut -d' ' -f1)
+
+        # 更新 PKGBUILD 中的源地址和校验和
+        sed -i "s|https://static2.fnnas.com/fnpack/fnpack-[0-9.]*-linux-amd64|https://static2.fnnas.com/fnpack/fnpack-${NEW_VERSION}-linux-amd64|" PKGBUILD
+        sed -i "s|https://static2.fnnas.com/fnpack/fnpack-[0-9.]*-linux-arm64|https://static2.fnnas.com/fnpack/fnpack-${NEW_VERSION}-linux-arm64|" PKGBUILD
+        sed -i "s/sha256sums.('.*')/sha256sums.('$X86_64_CHECKSUM')/g" PKGBUILD
+        sed -i "s/sha256sums.('.*')/sha256sums.('$AARCH64_CHECKSUM')/g" PKGBUILD
+
+        # 更新 pkgrel
+        sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+
+        # 生成新的 .SRCINFO
+        # 安装 arch package tools 来生成 .SRCINFO
+        sudo apt-get update
+        sudo apt-get install -y python3
+
+        # 手动更新 .SRCINFO
+        sed -i "s/pkgver = .*/pkgver = $NEW_VERSION/" .SRCINFO
+        sed -i "s/pkgrel = .*/pkgrel = 1/" .SRCINFO
+        sed -i "s|source_x86_64 = .*/fnpack-[0-9.]*-linux-amd64$|source_x86_64 = $X86_64_URL|" .SRCINFO
+        sed -i "s/sha256sums_x86_64 = .*/sha256sums_x86_64 = $X86_64_CHECKSUM/" .SRCINFO
+        sed -i "s|source_aarch64 = .*/fnpack-[0-9.]*-linux-arm64$|source_aarch64 = $AARCH64_URL|" .SRCINFO
+        sed -i "s/sha256sums_aarch64 = .*/sha256sums_aarch64 = $AARCH64_CHECKSUM/" .SRCINFO
+
+        # 创建新分支并推送
+        BRANCH_NAME="update-to-$NEW_VERSION"
+        git checkout -b "$BRANCH_NAME"
+        git add PKGBUILD .SRCINFO
+        git commit -m "Update to version $NEW_VERSION"
+        git push origin "$BRANCH_NAME"
+
+        # 创建 PR
+        gh pr create \
+          --title "Update to version $NEW_VERSION" \
+          --body "Automated update to fnpack version $NEW_VERSION" \
+          --label "automated-update"
+
+        echo "Created PR to update to version $NEW_VERSION"
+
+    - name: Notify if no updates
+      if: steps.check_version.outputs.version_changed == 'false'
+      run: |
+        echo "No new version available. Current version is up to date."

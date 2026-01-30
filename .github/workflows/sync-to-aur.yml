@@ -1,0 +1,51 @@
+name: Sync to AUR
+
+on:
+  push:
+    branches:
+      - main  # 当 main 分支被更新时触发
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  sync-to-aur:
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, 'Update to version') || contains(github.event.head_commit.message, 'Update to v')  # 仅当提交消息包含更新版本信息时运行
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup SSH for AUR
+      if: secrets.AUR_SSH_PRIVATE_KEY != null
+      uses: webfactory/ssh-agent@v0.8.0
+      with:
+        ssh-private-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        
+    - name: Sync to AUR
+      if: secrets.AUR_SSH_PRIVATE_KEY != null
+      run: |
+        # 克隆 AUR 仓库
+        git clone ssh://aur@aur.archlinux.org/fnpack-bin.git aur-repo
+        cd aur-repo
+
+        # 复制更新的文件
+        cp ../PKGBUILD .
+        cp ../.SRCINFO .
+
+        # 提交并推送
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add .
+        if ! git diff --cached --quiet; then
+          git commit -m "Update to $(grep '^pkgver=' ../PKGBUILD | cut -d'=' -f2)"
+          git push
+          echo "Successfully synced to AUR"
+        else
+          echo "No changes to sync to AUR"
+        fi
+        
+    - name: Skip AUR sync (no SSH key)
+      if: secrets.AUR_SSH_PRIVATE_KEY == null
+      run: |
+        echo "AUR_SSH_PRIVATE_KEY not provided, skipping AUR sync"
+        echo "To enable AUR sync, add your SSH private key as a secret named AUR_SSH_PRIVATE_KEY"
